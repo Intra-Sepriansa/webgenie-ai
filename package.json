@@ -1,0 +1,89 @@
+{
+  "name": "webgenie-ai",
+  "displayName": "WebGenie AI",
+  "description": "Autonomous AI Web Developer for VS Code powered by DeepSeek. Generates entire web applications directly into your workspace.",
+  "version": "0.1.0",
+  "publisher": "webgenie",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/webgenie/webgenie-ai"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "webgenie",
+    "deepseek",
+    "ai web developer",
+    "autonomous agent",
+    "code generator"
+  ],
+  "activationEvents": [
+    "onView:webgenie.sidebarView"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "webgenie-sidebar-container",
+          "title": "WebGenie AI",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "webgenie-sidebar-container": [
+        {
+          "type": "webview",
+          "id": "webgenie.sidebarView",
+          "name": "WebGenie Agent",
+          "contextualTitle": "WebGenie AI"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "webgenie.setApiKey",
+        "title": "WebGenie: Set DeepSeek API Key",
+        "category": "WebGenie"
+      },
+      {
+        "command": "webgenie.clearApiKey",
+        "title": "WebGenie: Clear DeepSeek API Key",
+        "category": "WebGenie"
+      },
+      {
+        "command": "webgenie.runDevServer",
+        "title": "WebGenie: Run Dev Server",
+        "category": "WebGenie"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "build": "webpack --mode production",
+    "package": "vsce package",
+    "install-ext": "npm run compile && npx @vscode/vsce package --no-dependencies && code --install-extension webgenie-ai-0.1.0.vsix --force",
+    "setup": "npm run install-ext"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.3",
+    "webpack": "^5.90.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "openai": "^4.33.0"
+  }
+}
