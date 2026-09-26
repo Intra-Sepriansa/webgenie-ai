@@ -141,6 +141,51 @@ export class VerificationService {
       if (f.path.endsWith('.php')) {
         try {
           await execAsync(`php -l "${fullPath}"`);
+
+          // Runtime Database Connection Verification (detects SQLSTATE[HY000] [2002] and auto-heals)
+          const isDbFile = /koneksi|db|database|config/i.test(f.path);
+          if (isDbFile) {
+            try {
+              const testCmd = `php -r "require '${fullPath}'; echo '__DB_OK__';"`;
+              const { stdout, stderr } = await execAsync(testCmd);
+              const out = (stdout + ' ' + stderr).trim();
+              if (
+                out.includes('SQLSTATE') ||
+                out.includes('Koneksi database gagal') ||
+                out.includes('No such file or directory') ||
+                out.includes('Connection refused') ||
+                !out.includes('__DB_OK__')
+              ) {
+                const healedDb = this.generateFallbackDatabase();
+                f.content = healedDb;
+                await vscode.workspace.fs.writeFile(
+                  vscode.Uri.file(fullPath),
+                  Buffer.from(healedDb, 'utf8')
+                );
+                autoFixedCount++;
+                issues.push({
+                  type: 'db_config',
+                  filePath: f.path,
+                  message: `Auto-healed database connection: Injected Smart Dual-Engine (MySQL + SQLite fallback with auto-seeded schema)`,
+                  fixed: true
+                });
+              }
+            } catch {
+              const healedDb = this.generateFallbackDatabase();
+              f.content = healedDb;
+              await vscode.workspace.fs.writeFile(
+                vscode.Uri.file(fullPath),
+                Buffer.from(healedDb, 'utf8')
+              );
+              autoFixedCount++;
+              issues.push({
+                type: 'db_config',
+                filePath: f.path,
+                message: `Auto-healed database connection: Injected Smart Dual-Engine (MySQL + SQLite fallback with auto-seeded schema)`,
+                fixed: true
+              });
+            }
+          }
         } catch (err: any) {
           const output = (err?.stdout || err?.stderr || '').trim();
           if (output.includes('Parse error') || output.includes('syntax error')) {
@@ -736,24 +781,47 @@ $user = 'root';
 $pass = '';
 
 $pdo = null;
+$dbType = 'mysql';
 
-// Try MySQL TCP 127.0.0.1:3306 first
+// 1. Try MySQL TCP 127.0.0.1:3306 with fast 1-second timeout
 try {
     $dsn = "mysql:host=$host;port=$port;charset=utf8mb4";
     $pdo = new PDO($dsn, $user, $pass, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_TIMEOUT => 2
+        PDO::ATTR_TIMEOUT            => 1
     ]);
     $pdo->exec("CREATE DATABASE IF NOT EXISTS \`$db\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
     $pdo->exec("USE \`$db\`");
-} catch (Exception $e) {
-    // Zero-config SQLite fallback if MySQL is offline
+} catch (Throwable $e) {
+    // 2. Zero-config SQLite fallback if MySQL is offline or not installed
+    $dbType = 'sqlite';
     $sqlitePath = __DIR__ . '/database.sqlite';
     $pdo = new PDO("sqlite:" . $sqlitePath, null, null, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
     ]);
+}
+
+// 3. Auto-seed schema from database.sql if present and SQLite
+if ($dbType === 'sqlite' && file_exists(__DIR__ . '/database.sql')) {
+    try {
+        $sql = file_get_contents(__DIR__ . '/database.sql');
+        $cleanSql = preg_replace('/ENGINE\\s*=\\s*[a-zA-Z0-9_]+/i', '', $sql);
+        $cleanSql = preg_replace('/DEFAULT\\s+CHARSET\\s*=\\s*[a-zA-Z0-9_]+/i', '', $cleanSql);
+        $cleanSql = preg_replace('/COLLATE\\s*=\\s*[a-zA-Z0-9_]+/i', '', $cleanSql);
+        $cleanSql = preg_replace('/AUTO_INCREMENT/i', 'AUTOINCREMENT', $cleanSql);
+        $cleanSql = preg_replace('/INT\\s+UNSIGNED/i', 'INTEGER', $cleanSql);
+        $cleanSql = preg_replace('/USE\\s+[^;]+;/i', '', $cleanSql);
+        $cleanSql = preg_replace('/CREATE\\s+DATABASE[^;]+;/i', '', $cleanSql);
+        $pdo->exec($cleanSql);
+    } catch (Throwable $ignore) {}
+}
+
+if (!function_exists('e')) {
+    function e($str) {
+        return htmlspecialchars((string)$str, ENT_QUOTES, 'UTF-8');
+    }
 }
 `;
   }
