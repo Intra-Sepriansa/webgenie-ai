@@ -1,30 +1,33 @@
 /**
- * Framework Architecture Skill
- * Guides DeepSeek to output clean, well-factored, maintainable project architectures.
+ * Token-Optimized Omni-Stack Framework Skill
  */
 export const FRAMEWORK_SKILL = `
-=== FRAMEWORK & CODE ARCHITECTURE RULES ===
+=== TECH STACK RULES ===
+Strictly honor the user's requested tech stack:
 
-1. IF TECH STACK IS 'Modern HTML5 + Tailwind CSS + Vanilla JS':
-- Perfect for instant zero-config setup that runs immediately without long npm install waits!
-- Architecture:
-  * index.html: Fully structured, semantic, loading Tailwind CDN (v3.4+), Google Fonts, and script.js.
-  * css/style.css: Custom animations, keyframes, scrollbar styling, glassmorphism utilities.
-  * js/app.js: Clean modern ES6+ code organizing modal logic, filter tabs, scroll listener, and toast messages.
-- suggestedCommand: "npx serve ." or "npm install && npm run dev" (if package.json with dev server is provided).
+1. PHP NATIVE + MYSQL (FULL STACK CRUD & DATABASE):
+   - ALWAYS implement SMART DUAL-ENGINE in 'koneksi.php':
+     * Primary: Connect via TCP '127.0.0.1:3306' (avoids Mac/Linux socket 2002 errors), auto-create database if not exists, and auto-import 'database.sql'.
+     * Auto-Fallback: If MySQL/XAMPP is offline, catch exception and AUTOMATICALLY connect to local SQLite ('database.sqlite'), creating tables and inserting sample seed data on the fly!
+     * This guarantees the web app RUNS IMMEDIATELY when the user clicks 'Launch Dev Server' (php -S localhost:8000) with ZERO crashes or database setup hurdles!
+   - database.sql: Full schema with users (admin/admin123), main tables, and realistic seed data.
+   - index.php: Modern dashboard with Bootstrap 5 or Tailwind CDN + Google Fonts.
+   - Complete working CRUD + Auth (login.php, logout.php, auth.php).
+   - command: php -S localhost:8000
 
-2. IF TECH STACK IS 'Vite + React + TypeScript + Tailwind CSS':
-- Architecture:
-  * package.json: React 18/19, Vite, Tailwind CSS, Lucide-React, TypeScript dependencies.
-  * vite.config.ts, tsconfig.json, tailwind.config.js, postcss.config.js.
-  * index.html: Clean entry point.
-  * src/main.tsx & src/App.tsx: Main application layout.
-  * src/components/: Modular, atomic components (e.g., Navbar.tsx, Hero.tsx, BentoGrid.tsx, BookingModal.tsx, Testimonials.tsx, Footer.tsx).
-  * src/types/: TypeScript data interfaces.
-- suggestedCommand: "npm install && npm run dev".
+2. Python Flask/FastAPI:
+   - app.py, requirements.txt, templates/ with Tailwind.
+   - command: python3 app.py
 
-3. ZERO ERRORS & COMPLETE FILES:
-- Ensure package.json has all necessary dependencies matching imports.
-- Never import a library without declaring it in package.json.
-- Always provide index.html as the primary web entry point.
+3. Node.js Express:
+   - package.json, server.js, public/ static assets.
+   - command: npm install && npm start
+
+4. React / Vite:
+   - package.json, vite.config.ts, src/App.tsx, components.
+   - command: npm install && npm run dev
+
+5. HTML5 + Tailwind:
+   - index.html, style.css, app.js.
+   - command: npx serve .
 `;

@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
-import { AIProjectResponse } from '../types';
+import { jsonrepair } from 'jsonrepair';
+import { AIProjectResponse, GeneratedFile } from '../types';
 import { buildSkillsPrompt, SkillOptions } from '../skills';
 
 export class AIService {
@@ -8,7 +9,7 @@ export class AIService {
 
   constructor(apiKey: string) {
     if (!apiKey || apiKey.trim() === '') {
-      throw new Error('DeepSeek API Key is missing. Please set your API key first.');
+      throw new Error('DeepSeek API Key is missing. Please set your API key in settings.');
     }
     this.apiKey = apiKey.trim();
     this.client = new OpenAI({
@@ -18,71 +19,90 @@ export class AIService {
   }
 
   /**
-   * Generates a complete project architecture and file tree based on user description,
-   * infused with Anti-AI-Slop and high-end design engineering skills.
+   * Generates a complete project with real-time streaming and token-saving optimization.
    */
   public async generateProject(
     prompt: string,
     model: string = 'deepseek-chat',
     frameworkPreference?: string,
-    skillOptions?: SkillOptions
+    skillOptions?: SkillOptions,
+    onStreamChunk?: (streamedLength: number, activeFile?: string) => void
   ): Promise<AIProjectResponse> {
+    const trimmedPrompt = prompt.trim();
+    const isShortQuery = trimmedPrompt.length < 25;
+
+    // Dynamically adjust token limits to save cost and maximize speed
+    const maxTokens = isShortQuery ? 2048 : 5120;
+
     const skillsInstructions = buildSkillsPrompt(skillOptions);
 
-    const systemPrompt = `You are WebGenie AI, a Principal Design Technologist and Lead Full-Stack Architect.
-Your mission is to craft jaw-dropping, production-grade, human-level web applications directly into the user's workspace.
-You actively reject generic "AI slop" and deliver bespoke, high-craft digital experiences inspired by Linear, Apple, Vercel, and Stripe.
+    const systemPrompt = `You are WebGenie AI, a Principal Full-Stack Engineer and UI Architect.
+Reject AI slop. Craft bespoke, production-ready, clean web apps directly into workspace files.
 
 ${skillsInstructions}
 
-CRITICAL OUTPUT INSTRUCTIONS:
-1. Output MUST be a strictly valid JSON object matching the exact schema specified below.
-2. NEVER return conversational text, apologies, markdown commentary, or backticks outside the JSON. Return raw valid JSON.
-3. Every file must contain COMPLETE, PRODUCTION-READY CODE. Absolutely NO placeholders, NO '// TODO', and NO truncated snippets.
-4. Include all necessary config files (e.g., package.json, index.html, vite.config.ts, tsconfig.json, CSS/Tailwind configs, README.md, etc.) so that running the suggestedCommand immediately works without missing dependencies.
-5. Provide a concise, executable terminal command in "suggestedCommand" (e.g., "npm install && npm run dev" or "npx serve .").
+FORMAT:
+Output each file inside <file path="...">...</file> tags. Write raw, complete code inside the tags.
+Include:
+<project_name>project-name</project_name>
+<description>Short description</description>
+<command>executable command</command>
 
-JSON OUTPUT SCHEMA:
-{
-  "projectName": "kebab-case-project-name",
-  "description": "Concise summary of what this application does",
-  "summary": "Bullet points of key features, architecture, and design highlights",
-  "suggestedCommand": "npm install && npm run dev",
-  "files": [
-    {
-      "path": "relative/file/path.ext",
-      "content": "Complete full code content as a valid JSON string with escaped newlines and quotes."
-    }
-  ]
-}
+<file path="index.html">
+... code ...
+</file>
 
-Framework Preference: ${frameworkPreference || 'Choose the best modern web stack (e.g. Modern HTML5 + Tailwind + Vanilla JS or Vite + React + TS) suitable for the user prompt.'}`;
+ADVANCED DESIGN & FULL COMPLETENESS RULES:
+1. ADVANCED VISUAL CRAFT (CRITICAL):
+   - Reject plain, raw, amateur HTML. The website MUST look stunning, high-craft, and production-ready.
+   - Include dark mode / luxury monochrome palettes, elevated stat cards, progress bars, status pills, and clean typography ('Plus Jakarta Sans').
+   - If using custom CSS classes (like .stat-card, .panel, .bar-row, etc.), ALWAYS embed the complete CSS directly inside <style> tags in the header or generate the complete style.css so that NO CSS FILE IS EVER 404 OR MISSING!
+2. COMPLETE WORKING PAGES:
+   - Generate all necessary pages requested (e.g. dashboard, data list, forms, auth).
+   - In PHP + MySQL projects, always use the Smart Dual-Engine database in koneksi.php (TCP 127.0.0.1 + SQLite auto-fallback) so it runs instantly on localhost:8000.
+3. If the user prompt is a casual greeting or test ("bro", "halo", "tes"), generate a sleek single-file web app (index.html) with a greeting hero "Halo Bro! WebGenie Siap Coding Web Kamu", live demo interactive widgets, and contact modal.
+4. Strictly honor requested tech stack: PHP Native + MySQL, Python, Node, React, or HTML.
+Framework: ${frameworkPreference || 'Auto'}`;
 
-    const userMessage = `Create a complete, bespoke, anti-ai-slop web application based on this prompt:
-"${prompt}"
-
-Remember:
-- Apply the Anti-AI-Slop Manifesto (asymmetric Bento Grid, curated Unsplash photos, clean typography hierarchy, crisp 1px borders, functioning modals & micro-interactions).
-- Respond ONLY with a valid JSON object containing all required files and runnable commands.`;
+    const userMessage = `Create web application for: "${trimmedPrompt}". Output using <file path="..."> tags.`;
 
     try {
-      const response = await this.client.chat.completions.create({
+      const stream = await this.client.chat.completions.create({
         model: model || 'deepseek-chat',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage }
         ],
-        // DeepSeek JSON Mode requires the word "json" in the prompt
-        response_format: model === 'deepseek-reasoner' ? undefined : { type: 'json_object' },
-        temperature: 0.2
+        temperature: 0.2,
+        max_tokens: maxTokens,
+        stream: true
       });
 
-      const rawContent = response.choices[0]?.message?.content;
-      if (!rawContent) {
+      let rawContent = '';
+      let currentFile = '';
+      let lastReportTime = 0;
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content || '';
+        rawContent += delta;
+
+        const fileMatches = [...rawContent.matchAll(/<file\s+path=["']([^"']+)["']>/gi)];
+        if (fileMatches.length > 0) {
+          currentFile = fileMatches[fileMatches.length - 1][1];
+        }
+
+        const now = Date.now();
+        if (onStreamChunk && now - lastReportTime > 80) {
+          lastReportTime = now;
+          onStreamChunk(rawContent.length, currentFile);
+        }
+      }
+
+      if (!rawContent || rawContent.trim() === '') {
         throw new Error('Received an empty response from DeepSeek API.');
       }
 
-      return this.parseAndValidateResponse(rawContent);
+      return this.parseAndExtractFiles(rawContent);
     } catch (error: any) {
       if (error?.status === 401) {
         throw new Error('Invalid DeepSeek API Key. Please verify your key in WebGenie settings.');
@@ -94,62 +114,151 @@ Remember:
   }
 
   /**
-   * Resilient JSON parser that handles markdown code blocks or surrounding text.
+   * Resilient extractor that parses <file path="..."> tags, markdown code blocks, or JSON.
    */
-  private parseAndValidateResponse(raw: string): AIProjectResponse {
-    let clean = raw.trim();
+  private parseAndExtractFiles(raw: string): AIProjectResponse {
+    const files: GeneratedFile[] = [];
 
-    // Remove markdown code fences if model enclosed JSON in ```json ... ```
-    if (clean.startsWith('```')) {
-      clean = clean.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    }
+    // 1. Tag-based extraction: <file path="...">...</file>
+    const fileTagRegex = /<file\s+path=["']([^"']+)["']>([\s\S]*?)(?:<\/file>|(?=<file\s+path=)|$)/gi;
+    let match: RegExpExecArray | null;
 
-    // Extract the outermost JSON object if there is surrounding commentary
-    const firstBrace = clean.indexOf('{');
-    const lastBrace = clean.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      clean = clean.substring(firstBrace, lastBrace + 1);
-    }
+    while ((match = fileTagRegex.exec(raw)) !== null) {
+      const filePath = match[1].trim();
+      let content = match[2];
+      content = content.replace(/^\r?\n/, '').replace(/\r?\n$/, '');
 
-    let parsed: any;
-    try {
-      parsed = JSON.parse(clean);
-    } catch (parseError: any) {
-      try {
-        const sanitized = clean.replace(/[\u0000-\u001F]+/g, (match) => {
-          if (match === '\n') return '\\n';
-          if (match === '\r') return '\\r';
-          if (match === '\t') return '\\t';
-          return '';
+      if (content.startsWith('```')) {
+        content = content.replace(/^```[a-zA-Z0-9_-]*\r?\n/, '').replace(/\r?\n```$/, '');
+      }
+
+      if (filePath && content.length > 0) {
+        files.push({
+          path: filePath,
+          content: content
         });
-        parsed = JSON.parse(sanitized);
+      }
+    }
+
+    // 2. Fallback: Markdown header format
+    if (files.length === 0) {
+      const mdFileRegex = /(?:###|##|\*\*)\s*(?:FILE|File):\s*`?([^\n`]+)`?\s*\n```[a-zA-Z0-9_-]*\r?\n([\s\S]*?)\r?\n```/gi;
+      while ((match = mdFileRegex.exec(raw)) !== null) {
+        const filePath = match[1].trim();
+        const content = match[2];
+        if (filePath && content.length > 0) {
+          files.push({
+            path: filePath,
+            content: content
+          });
+        }
+      }
+    }
+
+    // 3. Fallback: JSON format
+    if (files.length === 0) {
+      let clean = raw.trim();
+      if (clean.startsWith('```')) {
+        clean = clean.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      }
+      const firstBrace = clean.indexOf('{');
+      const lastBrace = clean.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        clean = clean.substring(firstBrace, lastBrace + 1);
+      }
+
+      try {
+        let parsed: any;
+        try {
+          parsed = JSON.parse(clean);
+        } catch {
+          const repaired = jsonrepair(clean);
+          parsed = JSON.parse(repaired);
+        }
+
+        if (parsed && Array.isArray(parsed.files)) {
+          for (const f of parsed.files) {
+            if (f && typeof f.path === 'string' && typeof f.content === 'string') {
+              files.push({ path: f.path.trim(), content: f.content });
+            }
+          }
+        }
       } catch {
-        throw new Error(
-          `Failed to parse DeepSeek response as JSON. Parser output: ${parseError.message}\n\nSnippet:\n${clean.substring(0, 300)}...`
-        );
+        // Fallback
       }
     }
 
-    if (!parsed || typeof parsed !== 'object') {
-      throw new Error('AI output is not a valid JSON object.');
+    if (files.length === 0) {
+      throw new Error(
+        `Could not extract project files from DeepSeek response.\nSnippet:\n${raw.substring(0, 300)}...`
+      );
     }
 
-    if (!Array.isArray(parsed.files) || parsed.files.length === 0) {
-      throw new Error('AI response did not contain any files in "files" array.');
-    }
+    const projMatch = raw.match(/<project_name>([\s\S]*?)<\/project_name>/i);
+    const descMatch = raw.match(/<description>([\s\S]*?)<\/description>/i);
+    const cmdMatch = raw.match(/<command>([\s\S]*?)<\/command>/i);
 
-    for (const f of parsed.files) {
-      if (!f.path || typeof f.content !== 'string') {
-        throw new Error(`Invalid file entry generated by AI: ${JSON.stringify(f)}`);
-      }
-    }
+    const projectName = projMatch ? projMatch[1].trim() : 'webgenie-project';
+    const description = descMatch ? descMatch[1].trim() : 'Generated by WebGenie AI';
+    const suggestedCommand = cmdMatch ? cmdMatch[1].trim() : 'npm install && npm run dev';
 
     return {
-      projectName: parsed.projectName || 'webgenie-project',
-      description: parsed.description || 'Generated by WebGenie AI',
-      summary: parsed.summary || 'Project generated successfully with Anti-AI-Slop skills',
-      suggestedCommand: parsed.suggestedCommand || 'npm install && npm run dev',
-      files: parsed.files
+      projectName,
+      description,
+      summary: `Created ${files.length} production-ready files with Anti-AI-Slop design engineering.`,
+      suggestedCommand,
+      files
     };
   }
+
+  /**
+   * Autonomous code repair: fixes a syntax or runtime error in a file using DeepSeek.
+   */
+  public async fixFileError(
+    filePath: string,
+    fileContent: string,
+    errorMessage: string
+  ): Promise<string> {
+    const prompt = `Fix the syntax error in the following file:
+File: ${filePath}
+Error: ${errorMessage}
+
+Original content:
+${fileContent}
+
+Return ONLY the completely fixed code inside:
+<file path="${filePath}">
+...fixed code...
+</file>`;
+
+    try {
+      const response = await this.client.chat.completions.create({
+        model: 'deepseek-chat',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are an autonomous code repair agent. Fix syntax errors precisely without changing functionality. Output only <file path="...">fixed code</file>.'
+          },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.1,
+        max_tokens: 3072
+      });
+
+      const raw = response.choices[0]?.message?.content || '';
+      const match = raw.match(/<file\s+path=["'][^"']+["']>([\s\S]*?)<\/file>/i);
+      if (match) {
+        let fixed = match[1].replace(/^\r?\n/, '').replace(/\r?\n$/, '');
+        if (fixed.startsWith('```')) {
+          fixed = fixed.replace(/^```[a-zA-Z0-9_-]*\r?\n/, '').replace(/\r?\n```$/, '');
+        }
+        return fixed;
+      }
+      return fileContent;
+    } catch {
+      return fileContent;
+    }
+  }
 }
+

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { AIService } from './services/aiService';
 import { FileService } from './services/fileService';
 import { TerminalService } from './services/terminalService';
+import { VerificationService } from './services/verificationService';
 import { ExtensionToWebviewMessage, WebviewToExtensionMessage } from './types';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
@@ -74,6 +75,56 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
           break;
         }
+
+        case 'scanAndFixErrors': {
+          try {
+            const workspace = FileService.ensureWorkspace();
+            const apiKey = await this._context.secrets.get(SidebarProvider.SECRET_KEY);
+            const aiService = apiKey ? new AIService(apiKey) : undefined;
+            const report = await VerificationService.scanWorkspace(workspace.uri, aiService);
+            this.postMessage({
+              type: 'verificationComplete',
+              report
+            });
+          } catch (err: any) {
+            vscode.window.showErrorMessage(`Verification scan failed: ${err.message}`);
+          }
+          break;
+        }
+
+        case 'fixSingleError': {
+          try {
+            const workspace = FileService.ensureWorkspace();
+            const apiKey = await this._context.secrets.get(SidebarProvider.SECRET_KEY);
+            if (!apiKey) {
+              throw new Error('API Key is required to repair errors with AI.');
+            }
+            const aiService = new AIService(apiKey);
+            const res = await VerificationService.fixWorkspaceIssue(
+              {
+                type: 'syntax_error',
+                filePath: data.filePath,
+                message: data.issueMessage
+              },
+              workspace.uri,
+              aiService
+            );
+            this.postMessage({
+              type: 'errorFixed',
+              filePath: data.filePath,
+              success: res.success,
+              message: res.message
+            });
+            if (res.success) {
+              vscode.window.showInformationMessage(`WebGenie: ${res.message}`);
+            } else {
+              vscode.window.showWarningMessage(`WebGenie: ${res.message}`);
+            }
+          } catch (err: any) {
+            vscode.window.showErrorMessage(`Fix error failed: ${err.message}`);
+          }
+          break;
+        }
       }
     });
   }
@@ -136,7 +187,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       });
 
       const aiService = new AIService(apiKey);
-      const projectResponse = await aiService.generateProject(prompt, model, framework);
+      const projectResponse = await aiService.generateProject(
+        prompt,
+        model,
+        framework,
+        undefined,
+        (streamedLength, activeFile) => {
+          this.postMessage({
+            type: 'generationProgress',
+            progress: {
+              step: 'prompting',
+              message: activeFile
+                ? `Generating ${activeFile}...`
+                : `DeepSeek is streaming code (${Math.round(streamedLength / 4)} tokens)...`
+            }
+          });
+        }
+      );
 
       this.postMessage({
         type: 'generationProgress',
@@ -147,7 +214,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
       });
 
-      const createdFiles = await FileService.writeProjectFiles(
+      // 6. Write files
+      let allCreatedFiles = await FileService.writeProjectFiles(
         projectResponse.files,
         (filePath, index, total) => {
           this.postMessage({
@@ -159,14 +227,43 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
       );
 
+      // Verification & Error Detection (Auto-Heal missing assets / syntax check / AI self-repair)
+      this.postMessage({
+        type: 'generationProgress',
+        progress: {
+          step: 'verifying',
+          message: 'Verifying code integrity, syntax, and asset references...'
+        }
+      });
+
+      const { files: healedFiles, report } = await VerificationService.verifyAndHeal(
+        projectResponse.files,
+        FileService.ensureWorkspace().uri,
+        aiService
+      );
+
+      if (report.autoFixedCount > 0) {
+        const newlyAdded = healedFiles.slice(projectResponse.files.length);
+        if (newlyAdded.length > 0) {
+          const extraWritten = await FileService.writeProjectFiles(newlyAdded);
+          allCreatedFiles = allCreatedFiles.concat(extraWritten);
+        }
+      }
+
+      projectResponse.files = healedFiles;
+
+      const verificationNotes = report.summary;
+
       this.postMessage({
         type: 'generationSuccess',
         response: projectResponse,
-        createdFiles
+        createdFiles: allCreatedFiles,
+        verificationReport: report,
+        verificationNotes
       });
 
       const selection = await vscode.window.showInformationMessage(
-        `WebGenie: Generated "${projectResponse.projectName}" with ${createdFiles.length} files.`,
+        `WebGenie: Generated "${projectResponse.projectName}" with ${allCreatedFiles.length} files. (${verificationNotes})`,
         'Launch Dev Server'
       );
 
@@ -213,6 +310,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   <div class="top-nav">
     <div class="chats-title">Chats</div>
     <div class="nav-actions">
+      <button id="btn-scan-errors" class="btn-icon" title="Scan & Fix Workspace Errors">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          <path d="m9 12 2 2 4-4"></path>
+        </svg>
+      </button>
       <button id="btn-history" class="btn-icon" title="Recent History">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
           <circle cx="12" cy="12" r="10"></circle>
@@ -264,6 +367,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <!-- Active User Message Bubble -->
     <div id="user-msg-bubble" class="user-msg-bubble" style="display:none;"></div>
 
+    <!-- Diagnostic Card (On-Demand Workspace Scan) -->
+    <div id="diagnostic-card" class="diagnostic-card" style="display:none;">
+      <div class="diagnostic-header">
+        <div class="diagnostic-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            <path d="m9 12 2 2 4-4"></path>
+          </svg>
+          <span>Workspace Diagnostic</span>
+        </div>
+        <button id="btn-close-diagnostic" class="btn-icon" title="Close">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div id="diagnostic-summary" class="diagnostic-summary">Scanning workspace for errors...</div>
+      <div id="diagnostic-list" class="diagnostic-list"></div>
+    </div>
+
     <!-- Progress Card -->
     <div id="progress-card" class="progress-card">
       <div class="progress-header">
@@ -281,6 +405,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <div id="result-title" class="result-title">Project Generated</div>
       <div id="result-desc" class="result-desc">All files have been written directly to your workspace.</div>
       
+      <!-- Verification Badge & Diagnostic -->
+      <div id="verification-card" class="verification-card">
+        <div class="verification-pill" id="verification-pill">
+          <svg class="verify-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+          <span id="verification-summary">Verified: 0 syntax or asset errors found</span>
+        </div>
+        <div id="verification-issues-list" class="verification-issues-list" style="display:none;"></div>
+      </div>
+
       <div id="file-list-box" class="file-list-box"></div>
 
       <div class="terminal-action-box">
@@ -320,8 +455,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         </select>
         <select id="framework-select" class="capsule-select" title="Tech Stack">
           <option value="Auto / Best Fit" selected>Auto</option>
+          <option value="PHP Native + MySQL (database.sql, CRUD)">PHP</option>
           <option value="Modern HTML5 + Tailwind CSS + Vanilla JS (Zero Config)">HTML</option>
           <option value="Vite + React + TypeScript + Tailwind CSS">React</option>
+          <option value="Node.js + Express + REST API">Node</option>
+          <option value="Python Flask + SQLite">Python</option>
         </select>
       </div>
 

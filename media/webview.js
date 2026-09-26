@@ -5,6 +5,7 @@
   // Navigation & Settings
   const btnHistory = document.getElementById('btn-history');
   const btnToggleSettings = document.getElementById('btn-toggle-settings');
+  const btnScanErrors = document.getElementById('btn-scan-errors');
   const btnNewChat = document.getElementById('btn-new-chat');
   const btnClearChat = document.getElementById('btn-clear-chat');
   const recentChatsList = document.getElementById('recent-chats-list');
@@ -24,11 +25,21 @@
   const resultsCard = document.getElementById('results-card');
   const resultTitle = document.getElementById('result-title');
   const resultDesc = document.getElementById('result-desc');
+  const verificationCard = document.getElementById('verification-card');
+  const verificationPill = document.getElementById('verification-pill');
+  const verificationSummary = document.getElementById('verification-summary');
+  const verificationIssuesList = document.getElementById('verification-issues-list');
   const fileListBox = document.getElementById('file-list-box');
   const terminalCmdText = document.getElementById('terminal-cmd-text');
   const btnRunDev = document.getElementById('btn-run-dev');
   const errorCard = document.getElementById('error-card');
   const errorMsg = document.getElementById('error-msg');
+
+  // Diagnostic Card (On demand)
+  const diagnosticCard = document.getElementById('diagnostic-card');
+  const btnCloseDiagnostic = document.getElementById('btn-close-diagnostic');
+  const diagnosticSummary = document.getElementById('diagnostic-summary');
+  const diagnosticList = document.getElementById('diagnostic-list');
 
   // Input capsule
   const promptInput = document.getElementById('prompt-input');
@@ -58,6 +69,23 @@
     }
   });
 
+  // On-demand Error Scan
+  if (btnScanErrors) {
+    btnScanErrors.addEventListener('click', () => {
+      diagnosticCard.style.display = 'block';
+      diagnosticSummary.textContent = 'Scanning workspace for errors...';
+      diagnosticList.innerHTML = '<div style="padding:6px; font-size:10px; color:#71717a;">Checking PHP syntax, JS integrity, and missing stylesheets/scripts...</div>';
+      chatBody.scrollTop = chatBody.scrollHeight;
+      vscode.postMessage({ command: 'scanAndFixErrors' });
+    });
+  }
+
+  if (btnCloseDiagnostic) {
+    btnCloseDiagnostic.addEventListener('click', () => {
+      diagnosticCard.style.display = 'none';
+    });
+  }
+
   // New Chat / Clear
   function resetChatView() {
     emptyState.style.display = 'flex';
@@ -65,6 +93,11 @@
     progressCard.classList.remove('active');
     resultsCard.classList.remove('active');
     errorCard.classList.remove('active');
+    if (diagnosticCard) diagnosticCard.style.display = 'none';
+    if (verificationIssuesList) {
+      verificationIssuesList.innerHTML = '';
+      verificationIssuesList.style.display = 'none';
+    }
     promptInput.value = '';
     updateSendButtonState();
     promptInput.focus();
@@ -132,6 +165,10 @@
 
     resultsCard.classList.remove('active');
     fileListBox.innerHTML = '';
+    if (verificationIssuesList) {
+      verificationIssuesList.innerHTML = '';
+      verificationIssuesList.style.display = 'none';
+    }
     btnSend.classList.remove('active');
     promptInput.value = '';
 
@@ -194,6 +231,53 @@
     });
   }
 
+  function createIssueElement(issue) {
+    const item = document.createElement('div');
+    item.className = 'issue-item';
+
+    const left = document.createElement('div');
+    left.className = 'issue-left';
+
+    const title = document.createElement('div');
+    title.className = 'issue-title';
+    title.textContent = issue.filePath + (issue.line ? `:${issue.line}` : '');
+
+    const msg = document.createElement('div');
+    msg.className = 'issue-msg';
+    msg.textContent = issue.message;
+
+    left.appendChild(title);
+    left.appendChild(msg);
+
+    const right = document.createElement('div');
+    right.className = 'issue-right';
+
+    if (issue.fixed) {
+      const badge = document.createElement('span');
+      badge.className = 'issue-status-badge fixed';
+      badge.textContent = 'Auto-Healed';
+      right.appendChild(badge);
+    } else {
+      const btnFix = document.createElement('button');
+      btnFix.className = 'btn-fix-ai';
+      btnFix.textContent = 'Fix with AI';
+      btnFix.addEventListener('click', () => {
+        btnFix.textContent = 'Fixing...';
+        btnFix.disabled = true;
+        vscode.postMessage({
+          command: 'fixSingleError',
+          filePath: issue.filePath,
+          issueMessage: issue.message
+        });
+      });
+      right.appendChild(btnFix);
+    }
+
+    item.appendChild(left);
+    item.appendChild(right);
+    return item;
+  }
+
   // Handle messages from extension
   window.addEventListener('message', (event) => {
     const message = event.data;
@@ -211,12 +295,19 @@
       case 'generationProgress':
         progressCard.classList.add('active');
         if (message.progress.step === 'prompting') {
-          progressBar.style.width = '45%';
-          progressHeaderMsg.textContent = 'DeepSeek Generating Architecture...';
+          progressHeaderMsg.textContent = 'Generating with DeepSeek AI...';
           progressMsg.textContent = message.progress.message;
+          const current = parseInt(progressBar.style.width) || 15;
+          if (current < 65) {
+            progressBar.style.width = `${current + 2}%`;
+          }
         } else if (message.progress.step === 'writing') {
           progressBar.style.width = '75%';
           progressHeaderMsg.textContent = 'Writing Workspace Files...';
+          progressMsg.textContent = message.progress.message;
+        } else if (message.progress.step === 'verifying') {
+          progressBar.style.width = '92%';
+          progressHeaderMsg.textContent = 'Verifying Code & Assets...';
           progressMsg.textContent = message.progress.message;
         }
         chatBody.scrollTop = chatBody.scrollHeight;
@@ -258,7 +349,49 @@
         currentCommand = message.response.suggestedCommand || 'npm install && npm run dev';
         terminalCmdText.textContent = currentCommand;
 
+        // Verification & Error Detection Display
+        if (verificationSummary) {
+          verificationSummary.textContent = message.verificationNotes || 'Verified: 0 syntax or asset errors found.';
+        }
+        if (verificationIssuesList) {
+          verificationIssuesList.innerHTML = '';
+          if (message.verificationReport && message.verificationReport.issues && message.verificationReport.issues.length > 0) {
+            verificationIssuesList.style.display = 'flex';
+            message.verificationReport.issues.forEach(issue => {
+              const item = createIssueElement(issue);
+              verificationIssuesList.appendChild(item);
+            });
+          } else {
+            verificationIssuesList.style.display = 'none';
+          }
+        }
+
         chatBody.scrollTop = chatBody.scrollHeight;
+        break;
+
+      case 'verificationComplete':
+        if (diagnosticCard) {
+          diagnosticCard.style.display = 'block';
+          diagnosticSummary.textContent = message.report.summary;
+          diagnosticList.innerHTML = '';
+          if (!message.report.issues || message.report.issues.length === 0) {
+            diagnosticList.innerHTML = '<div style="padding:6px; font-size:10px; color:#a1a1aa;">All files verified. 0 syntax errors or missing references.</div>';
+          } else {
+            message.report.issues.forEach(issue => {
+              const item = createIssueElement(issue);
+              diagnosticList.appendChild(item);
+            });
+          }
+          chatBody.scrollTop = chatBody.scrollHeight;
+        }
+        break;
+
+      case 'errorFixed':
+        if (diagnosticSummary) {
+          diagnosticSummary.textContent = message.message;
+        }
+        // Re-scan workspace automatically to refresh issues
+        vscode.postMessage({ command: 'scanAndFixErrors' });
         break;
 
       case 'generationError':
